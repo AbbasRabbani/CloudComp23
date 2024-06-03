@@ -1,0 +1,547 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Parameters": {
+    "paramImageID": {
+      "Type": "AWS::EC2::Image::Id",
+      "Default": "ami-4dd18837",
+      "Description": "Amazon Image ID (Amazon Linux), Frankfurt ami-f573e19a, N. Virginia ami-4dd18837"
+    },
+    "paramInstanceType": {
+      "Type": "String",
+      "Default": "t2.nano",
+      "AllowedValues": [
+        "t2.nano",
+        "t2.micro",
+        "m1.small"
+      ],
+      "Description": "Enter t2.micro, m1.small, or m1.large. Default is t2.micro."
+    },
+    "paramKeyPair": {
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "Default": "vockey",
+      "Description": "Amazon EC2 Key Pair"
+    },
+    "paramIamInstanceRole": {
+      "Type": "String",
+      "Default": "LabRole",
+      "Description": "IAM Instance Role"
+    }
+  },
+  "Resources": {
+    "lcVertSysAutoScaleConfigv11": {
+      "Type": "AWS::AutoScaling::LaunchConfiguration",
+      "Properties": {
+        "AssociatePublicIpAddress": true,
+        "ImageId": {
+          "Ref": "paramImageID"
+        },
+        "InstanceType": {
+          "Ref": "paramInstanceType"
+        },
+        "KeyName": {
+          "Ref": "paramKeyPair"
+        },
+        "IamInstanceProfile": {
+          "Ref": "paramIamInstanceRole"
+        },
+        "SecurityGroups": [
+          {
+            "Ref": "sgCloudCompDemoSecurityGroup"
+          }
+        ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": [
+              "",
+              [
+                "#!/bin/bash\n",
+                "\n",
+                "# this script will be run during the boot process by each VertSys instance created\n",
+                "# in AWS currently this is a plain bash script that requires a RedHat based image\n",
+                "# (AMI) could be ported to cloud-init for better compatibility with other Linux\n",
+                "# distros\n",
+                "#\n",
+                "# see https://docs.aws.amazon.com/de_de/AWSEC2/latest/UserGuide/user-data.html\n",
+                "\n",
+                "# Config\n",
+                "SCRIPT_ROOT_PATH=\"/tmp/init-script\"\n",
+                "VERTSYS_PATH=\"$SCRIPT_ROOT_PATH/verteilte-systeme-bsc-ai-examples/VerteilteSysteme-Examples/build/\"\n",
+                "#JARS = \"TCPServer.jar TCPServerMulti.jar UDPServer.jar UDPServerMulti.jar UDPTimeCounterServer.jar TCPTimeCounterServer.jar TCPPerfServer.jar\"\n",
+                "JARS=\"TCPServer.jar TCPPerfServer.jar UDPServer.jar UDPTimeCounterServer.jar TCPTimeCounterServer.jar TCPTimeCounterRESTServer.jar\"\n",
+                "REPO=\"https://gogs.informatik.hs-fulda.de/srieger/verteilte-systeme-bsc-ai-examples.git\"\n",
+                "\n",
+                "# Create path to run the script\n",
+                "mkdir $SCRIPT_ROOT_PATH\n",
+                "cd $SCRIPT_ROOT_PATH\n",
+                "\n",
+                "# fetch user-data (should be the content of this script itself ;)) to be able check it later and run it again\n",
+                "wget http://169.254.169.254/latest/user-data\n",
+                "chmod +x user-data\n",
+                "wget http://169.254.169.254/latest/meta-data/placement/availability-zone\n",
+                "\n",
+                "# setting console prompt to include location (availability zone and region in AWS)\n",
+                "echo \"PS1='[\\u@\\h@\\e[32m`cat /tmp/init-script/availability-zone`\\e[32m \\W]$ '\" >>/root/.bashrc\n",
+                "echo \"PS1='[\\u@\\h@\\e[32m`cat /tmp/init-script/availability-zone`\\e[39m \\W]$ '\" >>/home/ec2-user/.bashrc\n",
+                "\n",
+                "# wait for internet connection, should not be necessary, but just in case ;)\n",
+                "while ! ping -c 1 -W 1 8.8.8.8; do\n",
+                "    echo \"Waiting for 8.8.8.8 - network interface might be down...\"\n",
+                "    sleep 1\n",
+                "done\n",
+                "\n",
+                "# installation of required packages\n",
+                "echo \"Installing packages...\"\n",
+                "sudo yum update -y\n",
+                "sudo yum install -y java-1.8.0-openjdk-devel git\n",
+                "#rm -rf verteilte-systeme-bsc-ai-examples\n",
+                "if [ ! -d $VERTSYS_PATH ]; then\n",
+                "  echo \"Cloning repo...\"\n",
+                "  git clone $REPO\n",
+                "fi\n",
+                "\n",
+                "# killall running screens, .e.g to cleanup if script is run again after boot\n",
+                "killall screen\n",
+                "# start all jars\n",
+                "echo \"Starting JARS: ${JARS}...\"\n",
+                "for JAR in $JARS; do\n",
+                "  echo \"Starting ${JAR}...\"\n",
+                "  sudo screen -dmS $JAR -L java -jar $VERTSYS_PATH/$JAR\n",
+                "done\n",
+                "\n",
+                "# wait a second, to allow java services to start\n",
+                "sleep 1\n",
+                "\n",
+                "# output status of ports 36000-36199 and all running processes\n",
+                "echo \"Status:\"\n",
+                "sudo netstat -taupen | grep 36[0,1][0-9][0-9]\n",
+                "sudo ps aux | grep java\n",
+                "\n",
+                "# Example for path and contents:\n",
+                "#\n",
+                "# ./verteilte-systeme-bsc-ai-examples/VerteilteSysteme-Examples/build/\n",
+                "#\n",
+                "#build-server-jars.xml                TCPServerMulti.jar\n",
+                "#RMIEchoServer.jar                    UDPServer.jar\n",
+                "#RMIMandelbrotCalculationsServer.jar  UDPServerMulti.jar\n",
+                "#TCPPerfServer.jar                    UDPTimeCounterServer.jar\n",
+                "#TCPServer.jar\n"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "vpcCloudCompCounterDemo": {
+      "Type": "AWS::EC2::VPC",
+      "Properties": {
+        "CidrBlock": "10.0.0.0/16",
+        "EnableDnsSupport": "true",
+        "EnableDnsHostnames": "true",
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "vpcCloudCompCounterDemo"
+          }
+        ]
+      }
+    },
+    "subnetCloudCompCounterDemoPublicSubnetAz1": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {
+          "Ref": "vpcCloudCompCounterDemo"
+        },
+        "CidrBlock": "10.0.0.0/24",
+        "AvailabilityZone": {
+          "Fn::Select": [
+            "0",
+            {
+              "Fn::GetAZs": {
+                "Ref": "AWS::Region"
+              }
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "subnetCloudCompCounterDemoPublicSubnetAz1"
+          }
+        ]
+      }
+    },
+    "subnetCloudCompCounterDemoPublicSubnetAz2": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "VpcId": {
+          "Ref": "vpcCloudCompCounterDemo"
+        },
+        "CidrBlock": "10.0.1.0/24",
+        "AvailabilityZone": {
+          "Fn::Select": [
+            "1",
+            {
+              "Fn::GetAZs": {
+                "Ref": "AWS::Region"
+              }
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "subnetCloudCompCounterDemoPublicSubnetAz2"
+          }
+        ]
+      }
+    },
+    "igCloudCompCounterDemo": {
+      "Type": "AWS::EC2::InternetGateway",
+      "Properties": {
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "igCloudCompCounterDemo"
+          }
+        ]
+      }
+    },
+    "attachGateway": {
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+      "Properties": {
+        "VpcId": {
+          "Ref": "vpcCloudCompCounterDemo"
+        },
+        "InternetGatewayId": {
+          "Ref": "igCloudCompCounterDemo"
+        }
+      }
+    },
+    "routetableViaIgw": {
+      "Type": "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": {
+          "Ref": "vpcCloudCompCounterDemo"
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "routetableViaIgw"
+          }
+        ]
+      }
+    },
+    "publicrouteViaIgw": {
+      "Type": "AWS::EC2::Route",
+      "DependsOn": "attachGateway",
+      "Properties": {
+        "RouteTableId": {
+          "Ref": "routetableViaIgw"
+        },
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": {
+          "Ref": "igCloudCompCounterDemo"
+        }
+      }
+    },
+    "publicsubnet1RouteTableAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "subnetCloudCompCounterDemoPublicSubnetAz1"
+        },
+        "RouteTableId": {
+          "Ref": "routetableViaIgw"
+        }
+      }
+    },
+    "publicsubnet2RouteTableAssociation": {
+      "Type": "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "SubnetId": {
+          "Ref": "subnetCloudCompCounterDemoPublicSubnetAz2"
+        },
+        "RouteTableId": {
+          "Ref": "routetableViaIgw"
+        }
+      }
+    },
+    "sgCloudCompDemoSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "CloudComp Counter Demo",
+        "VpcId": {
+          "Ref": "vpcCloudCompCounterDemo"
+        }
+      }
+    },
+    "ingress1": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "sgCloudCompDemoSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": "36037",
+        "ToPort": "36137",
+        "CidrIp": "0.0.0.0/0"
+      }
+    },
+    "ingress2": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "sgCloudCompDemoSecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": "22",
+        "ToPort": "22",
+        "CidrIp": "0.0.0.0/0"
+      }
+    },
+    "ingress3": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "sgCloudCompDemoSecurityGroup"
+        },
+        "IpProtocol": "udp",
+        "FromPort": "36037",
+        "ToPort": "36137",
+        "CidrIp": "0.0.0.0/0"
+      }
+    },
+    "egress1": {
+      "Type": "AWS::EC2::SecurityGroupEgress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "sgCloudCompDemoSecurityGroup"
+        },
+        "IpProtocol": "-1",
+        "CidrIp": "0.0.0.0/0"
+      }
+    },
+    "asgCloudCompAutoScaleGroup": {
+      "Type": "AWS::AutoScaling::AutoScalingGroup",
+      "Properties": {
+        "AvailabilityZones": [
+          {
+            "Fn::Select": [
+              "0",
+              {
+                "Fn::GetAZs": {
+                  "Ref": "AWS::Region"
+                }
+              }
+            ]
+          },
+          {
+            "Fn::Select": [
+              "1",
+              {
+                "Fn::GetAZs": {
+                  "Ref": "AWS::Region"
+                }
+              }
+            ]
+          }
+        ],
+        "TargetGroupARNs": [
+          {
+            "Ref": "elbCloudCompTargetGroup"
+          }
+        ],
+        "Cooldown": "30",
+        "DesiredCapacity": "1",
+        "HealthCheckGracePeriod": "60",
+        "HealthCheckType": "EC2",
+        "MaxSize": "3",
+        "MinSize": "1",
+        "VPCZoneIdentifier": [
+          {
+            "Ref": "subnetCloudCompCounterDemoPublicSubnetAz1"
+          },
+          {
+            "Ref": "subnetCloudCompCounterDemoPublicSubnetAz2"
+          }
+        ],
+        "LaunchConfigurationName": {
+          "Ref": "lcVertSysAutoScaleConfigv11"
+        },
+        "MetricsCollection": [
+          {
+            "Granularity": "1Minute",
+            "Metrics": [
+              "GroupPendingInstances",
+              "GroupMinSize",
+              "GroupDesiredCapacity",
+              "GroupTerminatingInstances",
+              "GroupInServiceInstances",
+              "GroupStandbyInstances",
+              "GroupMaxSize",
+              "GroupTotalInstances"
+            ]
+          }
+        ],
+        "TerminationPolicies": [
+          "Default"
+        ]
+      }
+    },
+    "sgCloudCompScalePolicy": {
+      "Type": "AWS::AutoScaling::ScalingPolicy",
+      "DependsOn": "elbCloudCompListener",
+      "Properties": {
+        "PolicyType": "TargetTrackingScaling",
+        "EstimatedInstanceWarmup": 60,
+        "TargetTrackingConfiguration": {
+          "DisableScaleIn": false,
+          "TargetValue": 5,
+          "PredefinedMetricSpecification": {
+            "PredefinedMetricType": "ALBRequestCountPerTarget",
+            "ResourceLabel": {
+              "Fn::Join": [
+                "/",
+                [
+                  "app/elbCloudCompLoadBalancer",
+                  {
+                    "Fn::Select": [
+                      "3",
+                      {
+                        "Fn::Split": [
+                          "/",
+                          {
+                            "Ref": "elbCloudCompLoadBalancer"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "targetgroup/elbCloudCompTargetGroup",
+                  {
+                    "Fn::Select": [
+                      "2",
+                      {
+                        "Fn::Split": [
+                          "/",
+                          {
+                            "Ref": "elbCloudCompTargetGroup"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              ]
+            }
+          }
+        },
+        "AutoScalingGroupName": {
+          "Ref": "asgCloudCompAutoScaleGroup"
+        }
+      }
+    },
+    "elbCloudCompLoadBalancer": {
+      "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "Properties": {
+        "Name": "elbCloudCompLoadBalancer",
+        "IpAddressType": "ipv4",
+        "Type": "application",
+        "Scheme": "internet-facing",
+        "SecurityGroups": [
+          {
+            "Ref": "sgCloudCompDemoSecurityGroup"
+          }
+        ],
+        "Subnets": [
+          {
+            "Ref": "subnetCloudCompCounterDemoPublicSubnetAz1"
+          },
+          {
+            "Ref": "subnetCloudCompCounterDemoPublicSubnetAz2"
+          }
+        ]
+      }
+    },
+    "elbCloudCompTargetGroup": {
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+      "Properties": {
+        "Port": 36042,
+        "HealthCheckIntervalSeconds": 30,
+        "HealthCheckTimeoutSeconds": 5,
+        "HealthyThresholdCount": 2,
+        "UnhealthyThresholdCount": 2,
+        "HealthCheckPath": "/counter",
+        "HealthCheckProtocol": "HTTP",
+        "TargetGroupAttributes": [
+          {
+            "Key": "deregistration_delay.timeout_seconds",
+            "Value": "20"
+          }
+        ],
+        "Protocol": "HTTP",
+        "TargetType": "instance",
+        "Matcher": {
+          "HttpCode": "200"
+        },
+        "Name": "elbCloudCompTargetGroup",
+        "VpcId": {
+          "Ref": "vpcCloudCompCounterDemo"
+        }
+      }
+    },
+    "elbCloudCompListener": {
+      "Type": "AWS::ElasticLoadBalancingV2::Listener",
+      "Properties": {
+        "LoadBalancerArn": {
+          "Ref": "elbCloudCompLoadBalancer"
+        },
+        "Protocol": "HTTP",
+        "Port": 36042,
+        "DefaultActions": [
+          {
+            "Type": "forward",
+            "TargetGroupArn": {
+              "Ref": "elbCloudCompTargetGroup"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "LoadBalancer": {
+      "Description": "Load Balancer",
+      "Value": {
+        "Ref": "elbCloudCompLoadBalancer"
+      }
+    },
+    "LoadBalancerDns": {
+      "Description": "Load Balancer DNS",
+      "Value": {
+        "Fn::GetAtt": [
+          "elbCloudCompLoadBalancer",
+          "DNSName"
+        ]
+      }
+    },
+    "LoadBalancerURL": {
+      "Description": "Load Balancer URL",
+      "Value": {
+        "Fn::Join": [
+          ":",
+          [
+            {
+              "Fn::GetAtt": [
+                "elbCloudCompLoadBalancer",
+                "DNSName"
+              ]
+            },
+            "36042/counter"
+          ]
+        ]
+      }
+    }
+  },
+  "Description": "CloudComp Counter Demo"
+}

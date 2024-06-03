@@ -1,0 +1,9 @@
+clouds.yaml
+**/clouds.yaml
+venv
+**/terraform.exe
+**/terraform.tfstate
+**/terraform.tfstate.backup
+**/.terraform.lock.hcl
+**/.terraform
+**/.terraform.tfstate.lock.info

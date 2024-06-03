@@ -1,0 +1,14 @@
+.tox
+.vagrant
+*.pyc
+.venv
+*.egg-info
+*.egg
+.eggs
+.*.swp
+build
+*.log
+*.png
+AUTHORS
+ChangeLog
+dist
